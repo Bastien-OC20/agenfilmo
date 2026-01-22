@@ -32,6 +32,204 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------- CSS PERSONNALISÉ ----------------
+st.markdown(
+    """
+<style>
+    /* Styles généraux */
+    .main {
+        padding-top: 1rem;
+    }
+
+    /* Titre principal */
+    .main h1 {
+        color: #2E86AB;
+        text-align: center;
+        font-size: 2.5rem;
+        margin-bottom: 2rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+    }
+
+    /* Cartes de films */
+    .stColumns > div {
+        padding: 0.5rem;
+    }
+
+    /* Boutons personnalisés */
+    .stButton > button {
+        border-radius: 10px;
+        border: none;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+
+    /* Bouton primaire */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(45deg, #2E86AB, #A23B72);
+        color: white;
+    }
+
+    /* Bouton secondaire */
+    .stButton > button[kind="secondary"] {
+        background: linear-gradient(45deg, #F18F01, #C73E1D);
+        color: white;
+    }
+
+    /* Sidebar styling */
+    .css-1d391kg {
+        background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+    }
+
+    /* Headers dans la sidebar */
+    .css-1d391kg h2 {
+        color: #2E86AB;
+        border-bottom: 2px solid #2E86AB;
+        padding-bottom: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    /* Success messages */
+    .stSuccess {
+        background-color: rgba(40, 167, 69, 0.1);
+        border: 1px solid #28a745;
+        border-radius: 10px;
+        padding: 1rem;
+    }
+
+    /* Info messages */
+    .stInfo {
+        background-color: rgba(46, 134, 171, 0.1);
+        border: 1px solid #2E86AB;
+        border-radius: 10px;
+        padding: 1rem;
+    }
+
+    /* Warning messages */
+    .stWarning {
+        background-color: rgba(255, 193, 7, 0.1);
+        border: 1px solid #ffc107;
+        border-radius: 10px;
+        padding: 1rem;
+    }
+
+    /* Error messages */
+    .stError {
+        background-color: rgba(220, 53, 69, 0.1);
+        border: 1px solid #dc3545;
+        border-radius: 10px;
+        padding: 1rem;
+    }
+
+    /* Dataframe styling */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    /* Input fields */
+    .stTextInput > div > div > input {
+        border-radius: 10px;
+        border: 2px solid #e9ecef;
+        transition: border-color 0.3s ease;
+    }
+
+    .stTextInput > div > div > input:focus {
+        border-color: #2E86AB;
+        box-shadow: 0 0 0 0.2rem rgba(46, 134, 171, 0.25);
+    }
+
+    /* Number input */
+    .stNumberInput > div > div > input {
+        border-radius: 10px;
+        border: 2px solid #e9ecef;
+    }
+
+    /* Select box */
+    .stSelectbox > div > div > div {
+        border-radius: 10px;
+        border: 2px solid #e9ecef;
+    }
+
+    /* Expander */
+    .streamlit-expanderHeader {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        font-weight: 600;
+        color: #2E86AB;
+    }
+
+    /* Images styling */
+    .stImage {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    /* Divider */
+    hr {
+        margin: 2rem 0;
+        border: none;
+        height: 2px;
+        background: linear-gradient(45deg, #2E86AB, #A23B72);
+        border-radius: 1px;
+    }
+
+    /* Colonnes de la grille */
+    .element-container {
+        margin-bottom: 1rem;
+    }
+
+    /* Animation pour les cartes */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .element-container {
+        animation: fadeIn 0.5s ease-out;
+    }
+
+    /* Spinner personnalisé */
+    .stSpinner {
+        text-align: center;
+    }
+
+    /* Download button styling */
+    .stDownloadButton > button {
+        background: linear-gradient(45deg, #28a745, #20c997);
+        color: white;
+        border-radius: 10px;
+        font-weight: 600;
+    }
+
+    /* Mode d'emploi styling */
+    .css-1d391kg .stMarkdown {
+        font-size: 0.9rem;
+        line-height: 1.5;
+    }
+
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .main h1 {
+            font-size: 2rem;
+        }
+
+        .stColumns > div {
+            padding: 0.25rem;
+        }
+    }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 # ---------------- SESSION STATE ----------------
 if "search_results" not in st.session_state:
     st.session_state.search_results = []

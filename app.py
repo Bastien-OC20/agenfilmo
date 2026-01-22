@@ -8,7 +8,7 @@ import requests
 from io import BytesIO
 from PIL import Image
 import pandas as pd
-from datetime import datetime # noqa: F401
+from datetime import datetime  # noqa: F401
 import zipfile
 
 # Import des modules locaux
