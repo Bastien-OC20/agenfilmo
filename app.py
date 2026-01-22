@@ -1,6 +1,6 @@
 """
 Application Streamlit pour gérer les films du CDI d'un lycée.
-Permet de rechercher, afficher et exporter des informations sur les films.
+Sélection multiple, aperçu, export Excel et impression.
 """
 
 import streamlit as st
@@ -9,358 +9,409 @@ from io import BytesIO
 from PIL import Image
 import pandas as pd
 from datetime import datetime
+import zipfile
+import os
+import xlsxwriter
 
-# Configuration de la page
+# ---------------- CONFIGURATION PAGE ----------------
 st.set_page_config(
     page_title="Gestion Films CDI",
     page_icon="🎬",
     layout="wide"
 )
 
-# API TMDB (The Movie Database)
-# Note: Pour une utilisation en production, créez votre propre clé API gratuite sur https://www.themoviedb.org/settings/api
-TMDB_API_KEY = "YOUR_API_KEY_HERE"  # À remplacer par votre clé API
+# ---------------- CONFIGURATION TMDB ----------------
+TMDB_API_KEY = st.secrets.get("TMDB_API_KEY")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
+TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w300"  # image plus petite
 
-# Alternative: OMDb API (plus simple mais moins de données)
-# Pour utiliser OMDb, décommentez les lignes suivantes et commentez TMDB
-# OMDB_API_KEY = "YOUR_API_KEY_HERE"
-# OMDB_BASE_URL = "http://www.omdbapi.com/"
+# ---------------- SESSION STATE ----------------
+if "search_results" not in st.session_state:
+    st.session_state.search_results = []
+
+if "selected_movies" not in st.session_state:
+    st.session_state.selected_movies = []
 
 
-def search_movies_tmdb(query):
-    """
-    Recherche des films via l'API TMDB.
-    
-    Args:
-        query (str): Terme de recherche
-        
-    Returns:
-        list: Liste des films trouvés
-    """
-    if not query:
+# ---------------- FONCTIONS API ----------------
+def search_movies_tmdb(query: str) -> list:
+    if not query or not TMDB_API_KEY:
         return []
-    
-    # Si l'utilisateur n'a pas configuré de clé API, retourner des données de démonstration
-    if TMDB_API_KEY == "YOUR_API_KEY_HERE":
-        return get_demo_movies(query)
-    
-    try:
-        url = f"{TMDB_BASE_URL}/search/movie"
-        params = {
+
+    response = requests.get(
+        f"{TMDB_BASE_URL}/search/movie",
+        params={
             "api_key": TMDB_API_KEY,
             "query": query,
             "language": "fr-FR",
-            "include_adult": False
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        movies = []
-        
-        for movie in data.get("results", [])[:20]:  # Limiter à 20 résultats
-            # Obtenir les détails du film pour avoir le réalisateur
-            movie_details = get_movie_details_tmdb(movie["id"])
-            
-            movies.append({
+            "include_adult": False,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    movies = []
+    for movie in data.get("results", [])[:20]:
+        movies.append(
+            {
                 "id": movie["id"],
                 "titre": movie.get("title", "N/A"),
-                "titre_original": movie.get("original_title", "N/A"),
-                "annee": movie.get("release_date", "")[:4] if movie.get("release_date") else "N/A",
+                "annee": movie.get("release_date", "")[:4] or "N/A",
                 "resume": movie.get("overview", "Résumé non disponible"),
-                "affiche_url": f"{TMDB_IMAGE_BASE_URL}{movie['poster_path']}" if movie.get("poster_path") else None,
-                "realisateur": movie_details.get("realisateur", "N/A"),
-                "note": movie.get("vote_average", 0)
-            })
-        
-        return movies
-    
-    except Exception as e:
-        st.error(f"Erreur lors de la recherche : {str(e)}")
-        return []
+                "affiche_url": (
+                    f"{TMDB_IMAGE_BASE_URL}{movie['poster_path']}"
+                    if movie.get("poster_path")
+                    else None
+                ),
+                "note": movie.get("vote_average", "N/A"),
+            }
+        )
+    return movies
 
 
-def get_movie_details_tmdb(movie_id):
-    """
-    Obtient les détails d'un film incluant le réalisateur.
-    
-    Args:
-        movie_id (int): ID du film
-        
-    Returns:
-        dict: Détails du film
-    """
+# ---------------- TÉLÉCHARGEMENT D'IMAGES ----------------
+def download_single_image(movie):
+    """Télécharge une seule image de film"""
+    if not movie.get("affiche_url"):
+        st.error(f"Aucune image disponible pour {movie['titre']}")
+        return None
+
     try:
-        url = f"{TMDB_BASE_URL}/movie/{movie_id}/credits"
-        params = {
-            "api_key": TMDB_API_KEY,
-            "language": "fr-FR"
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(movie["affiche_url"], timeout=10)
         response.raise_for_status()
-        
-        data = response.json()
-        
-        # Trouver le réalisateur
-        directors = [crew["name"] for crew in data.get("crew", []) if crew.get("job") == "Director"]
-        realisateur = ", ".join(directors) if directors else "N/A"
-        
-        return {"realisateur": realisateur}
-    
-    except Exception as e:
-        return {"realisateur": "N/A"}
 
-
-def get_demo_movies(query):
-    """
-    Retourne des données de démonstration pour tester l'application sans clé API.
-    
-    Args:
-        query (str): Terme de recherche
+        # Créer un nom de fichier sûr
+        safe_filename = "".join(
+            c for c in movie["titre"] 
+            if c.isalnum() or c in (' ', '-', '_')
+        ).rstrip()
+        filename = f"{safe_filename}_{movie['annee']}.jpg"
         
-    Returns:
-        list: Liste de films de démonstration
-    """
-    demo_data = [
-        {
-            "id": 1,
-            "titre": "Inception",
-            "titre_original": "Inception",
-            "annee": "2010",
-            "resume": "Dom Cobb est un voleur expérimenté dans l'art périlleux de l'extraction : sa spécialité consiste à s'approprier les secrets les plus précieux d'un individu, enfouis au plus profond de son subconscient, pendant qu'il rêve et que son esprit est particulièrement vulnérable.",
-            "affiche_url": None,
-            "realisateur": "Christopher Nolan",
-            "note": 8.8
-        },
-        {
-            "id": 2,
-            "titre": "Le Parrain",
-            "titre_original": "The Godfather",
-            "annee": "1972",
-            "resume": "En 1945, à New York, les Corleone sont une des cinq familles de la mafia. Don Vito Corleone, parrain de cette famille, marie sa fille à un bookmaker. Sollozzo, parrain de la famille Tattaglia, propose à Don Vito une association dans le trafic de drogue, mais celui-ci refuse.",
-            "affiche_url": None,
-            "realisateur": "Francis Ford Coppola",
-            "note": 9.2
-        },
-        {
-            "id": 3,
-            "titre": "La Liste de Schindler",
-            "titre_original": "Schindler's List",
-            "annee": "1993",
-            "resume": "Evocation des années de guerre d'Oskar Schindler, industriel autrichien rentré à Cracovie en 1939 avec les troupes allemandes. Il va, tout au long de la guerre, protéger des juifs en les faisant travailler dans sa fabrique de casseroles.",
-            "affiche_url": None,
-            "realisateur": "Steven Spielberg",
-            "note": 9.0
+        return {
+            "data": response.content,
+            "filename": filename,
+            "mime": "image/jpeg"
         }
-    ]
-    
-    # Filtrer les films de démo selon la requête
-    query_lower = query.lower()
-    filtered = [movie for movie in demo_data if query_lower in movie["titre"].lower() or query_lower in movie["titre_original"].lower()]
-    
-    if not filtered:
-        # Si aucun match, retourner tous les films de démo
-        return demo_data
-    
-    return filtered
+    except Exception as e:
+        st.error(f"Erreur lors du téléchargement de l'image pour "
+                 f"{movie['titre']}: {str(e)}")
+        return None
 
 
-def display_movie_card(movie, col, index):
-    """
-    Affiche une carte de film dans une colonne.
-    
-    Args:
-        movie (dict): Informations du film
-        col: Colonne Streamlit
-        index (int): Index du film
-    """
-    with col:
-        with st.container():
-            st.markdown("---")
-            
-            # Checkbox pour sélectionner le film
-            selected = st.checkbox(
-                f"Sélectionner",
-                key=f"select_{index}",
-                value=st.session_state.get(f"selected_{index}", False)
-            )
-            st.session_state[f"selected_{index}"] = selected
-            
-            # Titre
-            st.subheader(f"🎬 {movie['titre']}")
-            
-            # Affiche
+def create_images_zip():
+    """Crée un fichier ZIP contenant toutes les images des films"""
+    if not st.session_state.selected_movies:
+        return None
+
+    zip_buffer = BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for movie in st.session_state.selected_movies:
             if movie.get("affiche_url"):
                 try:
                     response = requests.get(movie["affiche_url"], timeout=10)
                     response.raise_for_status()
-                    img = Image.open(BytesIO(response.content))
-                    st.image(img, use_container_width=True)
-                except (requests.RequestException, IOError, ValueError) as e:
-                    st.info("📽️ Affiche non disponible")
-            else:
-                st.info("📽️ Affiche non disponible")
-            
-            # Informations
-            st.write(f"**Année :** {movie['annee']}")
-            st.write(f"**Réalisateur :** {movie['realisateur']}")
-            if movie.get("note"):
-                st.write(f"**Note :** ⭐ {movie['note']}/10")
-            
-            # Résumé
-            with st.expander("📖 Résumé"):
-                st.write(movie['resume'])
+
+                    # Créer un nom de fichier sûr
+                    safe_filename = "".join(
+                        c for c in movie["titre"] 
+                        if c.isalnum() or c in (' ', '-', '_')
+                    ).rstrip()
+                    filename = f"{safe_filename}_{movie['annee']}.jpg"
+
+                    # Ajouter l'image au ZIP
+                    zip_file.writestr(filename, response.content)
+
+                except Exception as e:
+                    st.warning(f"Impossible de télécharger l'image pour "
+                              f"{movie['titre']}: {str(e)}")
+                    continue
+
+    zip_buffer.seek(0)
+    return zip_buffer
 
 
-def export_selected_movies():
-    """
-    Exporte les films sélectionnés en CSV et affiche un aperçu pour impression.
-    """
-    if "search_results" not in st.session_state or not st.session_state.search_results:
-        st.warning("Aucun résultat de recherche disponible.")
-        return
-    
-    selected_movies = []
-    for i, movie in enumerate(st.session_state.search_results):
-        if st.session_state.get(f"selected_{i}", False):
-            selected_movies.append({
-                "Titre": movie["titre"],
-                "Titre Original": movie["titre_original"],
-                "Année": movie["annee"],
-                "Réalisateur": movie["realisateur"],
-                "Résumé": movie["resume"],
-                "Note": movie.get("note", "N/A")
-            })
-    
-    if not selected_movies:
-        st.warning("Aucun film sélectionné. Veuillez cocher au moins un film.")
-        return
-    
-    # Créer un DataFrame
-    df = pd.DataFrame(selected_movies)
-    
-    # Section d'exportation
-    st.subheader("📊 Films sélectionnés")
-    
-    # Afficher le tableau
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    
-    # Bouton de téléchargement CSV
-    csv = df.to_csv(index=False, encoding='utf-8-sig')
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    st.download_button(
-        label="📥 Télécharger en CSV",
-        data=csv,
-        file_name=f"films_cdi_{timestamp}.csv",
-        mime="text/csv",
-    )
-    
-    # Version imprimable
-    st.subheader("🖨️ Version imprimable")
-    
-    print_content = "# LISTE DES FILMS - CDI\n\n"
-    print_content += f"Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-    print_content += "---\n\n"
-    
-    for i, movie_data in enumerate(selected_movies, 1):
-        print_content += f"## {i}. {movie_data['Titre']}\n\n"
-        print_content += f"**Titre original :** {movie_data['Titre Original']}\n\n"
-        print_content += f"**Année :** {movie_data['Année']}\n\n"
-        print_content += f"**Réalisateur :** {movie_data['Réalisateur']}\n\n"
-        print_content += f"**Note :** {movie_data['Note']}/10\n\n"
-        print_content += f"**Résumé :** {movie_data['Résumé']}\n\n"
-        print_content += "---\n\n"
-    
-    st.markdown(print_content)
-    
-    st.info("💡 Pour imprimer cette liste, utilisez la fonction d'impression de votre navigateur (Ctrl+P ou Cmd+P)")
+def create_excel_with_images():
+    """Crée un fichier Excel avec les images intégrées"""
+    if not st.session_state.selected_movies:
+        return None
+
+    excel_buffer = BytesIO()
+
+    # Créer un workbook avec xlsxwriter
+    workbook = xlsxwriter.Workbook(excel_buffer, {'in_memory': True})
+    worksheet = workbook.add_worksheet("Films CDI")
+
+    # Formats pour l'en-tête et les cellules
+    header_format = workbook.add_format({
+        'bold': True,
+        'font_size': 12,
+        'bg_color': '#4472C4',
+        'font_color': 'white',
+        'align': 'center',
+        'valign': 'vcenter',
+        'border': 1
+    })
+
+    cell_format = workbook.add_format({
+        'text_wrap': True,
+        'valign': 'top',
+        'border': 1
+    })
+
+    # En-têtes des colonnes
+    headers = ['Affiche', 'Titre', 'Année', 'Note', 'Résumé']
+    for col, header in enumerate(headers):
+        worksheet.write(0, col, header, header_format)
+
+    # Définir les largeurs des colonnes
+    worksheet.set_column(0, 0, 15)  # Colonne affiche
+    worksheet.set_column(1, 1, 25)  # Titre
+    worksheet.set_column(2, 2, 8)   # Année
+    worksheet.set_column(3, 3, 8)   # Note
+    worksheet.set_column(4, 4, 50)  # Résumé
+
+    # Ajouter les données et images
+    for row, movie in enumerate(st.session_state.selected_movies, 1):
+        # Définir la hauteur de la ligne pour l'image
+        worksheet.set_row(row, 120)  # 120 points ≈ 160 pixels
+
+        # Insérer l'image si disponible
+        if movie.get("affiche_url"):
+            try:
+                response = requests.get(movie["affiche_url"], timeout=10)
+                response.raise_for_status()
+
+                # Créer un BytesIO pour l'image
+                image_buffer = BytesIO(response.content)
+
+                # Insérer l'image dans la cellule
+                worksheet.insert_image(row, 0, f"image_{row}.jpg", {
+                    'image_data': image_buffer,
+                    'x_scale': 0.3,  # Réduire la taille
+                    'y_scale': 0.3,
+                    'x_offset': 5,
+                    'y_offset': 5
+                })
+            except Exception as e:
+                worksheet.write(row, 0, "Image indisponible", cell_format)
+        else:
+            worksheet.write(row, 0, "Pas d'image", cell_format)
+
+        # Ajouter les autres données
+        worksheet.write(row, 1, movie["titre"], cell_format)
+        worksheet.write(row, 2, str(movie["annee"]), cell_format)
+        worksheet.write(row, 3, str(movie["note"]), cell_format)
+        worksheet.write(row, 4, movie["resume"], cell_format)
+
+    workbook.close()
+    excel_buffer.seek(0)
+    return excel_buffer
 
 
-def main():
-    """
-    Fonction principale de l'application.
-    """
-    # En-tête
-    st.title("🎬 Gestion des Films du CDI")
-    st.markdown("*Application de recherche et gestion des films pour le Centre de Documentation et d'Information*")
-    
-    # Initialiser l'état de session
-    if "search_results" not in st.session_state:
-        st.session_state.search_results = []
-    
-    # Sidebar pour la configuration
-    with st.sidebar:
-        st.header("ℹ️ Informations")
-        st.info(
-            "Cette application utilise l'API TMDB (The Movie Database) pour rechercher des films.\n\n"
-            "**Mode démonstration actif** : Des données d'exemple sont affichées.\n\n"
-            "Pour utiliser l'API réelle, obtenez une clé API gratuite sur "
-            "[themoviedb.org](https://www.themoviedb.org/settings/api) "
-            "et modifiez la variable `TMDB_API_KEY` dans le code."
-        )
-        
-        st.header("📖 Instructions")
-        st.markdown("""
-        1. Entrez un titre de film dans la barre de recherche
-        2. Parcourez les résultats
-        3. Sélectionnez les films à exporter
-        4. Cliquez sur 'Exporter/Imprimer' pour obtenir la liste
-        """)
-    
-    # Barre de recherche
-    st.header("🔍 Rechercher un film")
-    
-    col1, col2 = st.columns([4, 1])
+# ---------------- AFFICHAGE FILM ----------------
+def display_movie_card(movie):
+    col1, col2 = st.columns([1, 3])
+
     with col1:
-        search_query = st.text_input(
-            "Entrez le titre du film",
-            placeholder="Ex: Inception, Le Parrain, Avatar...",
-            label_visibility="collapsed"
-        )
+        if movie["affiche_url"]:
+            response = requests.get(movie["affiche_url"])
+            img = Image.open(BytesIO(response.content))
+            img.thumbnail((150, 220))
+            st.image(img)
+
+            # Bouton de téléchargement individuel de l'image
+            image_data = download_single_image(movie)
+            if image_data:
+                st.download_button(
+                    "📥 Télécharger l'image",
+                    data=image_data["data"],
+                    file_name=image_data["filename"],
+                    mime=image_data["mime"],
+                    key=f"img_{movie['id']}",
+                    use_container_width=True
+                )
+        else:
+            st.info("📷 Pas d'image disponible")
+
     with col2:
-        search_button = st.button("🔍 Rechercher", use_container_width=True)
+        st.subheader(movie["titre"])
+        st.write(f"🎬 Année : {movie['annee']} | ⭐ {movie['note']}")
+        st.write(movie["resume"][:200] + "…")
+
+        if st.button("➕ Ajouter à la sélection", key=f"add_{movie['id']}"):
+            if movie not in st.session_state.selected_movies:
+                st.session_state.selected_movies.append(movie)
+
+
+# ---------------- EXPORT & IMPRESSION ----------------
+def export_and_print():
+    if not st.session_state.selected_movies:
+        st.warning("Aucun film sélectionné.")
+        return
+
+    df = pd.DataFrame(st.session_state.selected_movies)
+    df = df[["titre", "annee", "note", "resume"]]
+
+    st.subheader("📋 Films sélectionnés")
+    st.dataframe(df, use_container_width=True)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        # EXPORT EXCEL SIMPLE (sans images)
+        excel_buffer = BytesIO()
+        df.to_excel(excel_buffer, index=False)
+        excel_buffer.seek(0)
+
+        st.download_button(
+            "📥 Excel simple",
+            excel_buffer,
+            file_name="films_cdi_simple.xlsx",
+            mime=("application/vnd.openxmlformats-officedocument"
+                  ".spreadsheetml.sheet"),
+            help="Tableau Excel sans les images"
+        )
+
+    with col2:
+        # EXPORT EXCEL AVEC IMAGES
+        if st.button("📊 Préparer Excel avec images"):
+            with st.spinner("Création du fichier Excel avec images..."):
+                try:
+                    excel_with_images = create_excel_with_images()
+                    if excel_with_images:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        st.download_button(
+                            "📥 Excel avec images",
+                            data=excel_with_images,
+                            file_name=f"films_cdi_avec_images_{timestamp}.xlsx",
+                            mime=("application/vnd.openxmlformats-"
+                                  "officedocument.spreadsheetml.sheet"),
+                            key="download_excel_images",
+                            help="Tableau Excel avec les affiches intégrées"
+                        )
+                    else:
+                        st.error("Impossible de créer le fichier Excel avec "
+                                 "images")
+                except Exception as e:
+                    st.error(f"Erreur lors de la création du fichier Excel: "
+                            f"{str(e)}")
     
-    # Effectuer la recherche
-    if search_button and search_query:
-        with st.spinner("Recherche en cours..."):
-            st.session_state.search_results = search_movies_tmdb(search_query)
-            # Réinitialiser les sélections - nettoyer toutes les clés commençant par "selected_"
-            keys_to_delete = [key for key in st.session_state.keys() if key.startswith("selected_")]
-            for key in keys_to_delete:
-                del st.session_state[key]
-    
-    # Afficher les résultats
-    if st.session_state.search_results:
-        st.header(f"📋 Résultats ({len(st.session_state.search_results)} films trouvés)")
-        
-        # Bouton d'export en haut
-        if st.button("📤 Exporter/Imprimer les films sélectionnés", type="primary"):
-            st.session_state.show_export = True
-        
-        # Afficher les films en grille (2 colonnes)
-        for i in range(0, len(st.session_state.search_results), 2):
-            col1, col2 = st.columns(2)
-            
-            display_movie_card(st.session_state.search_results[i], col1, i)
-            
-            if i + 1 < len(st.session_state.search_results):
-                display_movie_card(st.session_state.search_results[i + 1], col2, i + 1)
-        
-        # Section d'export
-        if st.session_state.get("show_export", False):
-            st.markdown("---")
-            export_selected_movies()
-    
-    elif search_query and search_button:
-        st.warning("Aucun film trouvé. Essayez avec un autre titre.")
+    with col3:
+        # TÉLÉCHARGEMENT DES IMAGES EN ZIP
+        if st.button("🖼️ Préparer ZIP des images"):
+            with st.spinner("Création du fichier ZIP..."):
+                zip_data = create_images_zip()
+                if zip_data:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    st.download_button(
+                        "📦 ZIP des images",
+                        data=zip_data,
+                        file_name=f"images_films_{timestamp}.zip",
+                        mime="application/zip",
+                        key="download_all_images"
+                    )
+                else:
+                    st.error("Impossible de créer le fichier ZIP")
+
+    # VERSION IMPRIMABLE
+    st.subheader("🖨️ Version imprimable")
+    st.markdown(df.to_html(index=False), unsafe_allow_html=True)
+    st.info("Utilisez Ctrl+P / Cmd+P pour imprimer le tableau")
+
+
+# ---------------- BARRE LATERALE ----------------
+with st.sidebar:
+    st.header("📖 Mode d'emploi")
+
+    st.markdown("""
+    ### 🔍 Recherche de films
+    1. Entrez le titre d'un film dans la barre de recherche
+    2. Cliquez sur "Rechercher" pour lancer la recherche
+    3. Les résultats s'afficheront sous forme de cartes
+
+    ### ➕ Sélection de films
+    1. Parcourez les résultats de recherche
+    2. Cliquez sur "➕ Ajouter à la sélection" pour chaque film souhaité
+    3. Vos films sélectionnés apparaîtront dans la section "Sélection actuelle"
+
+    ### 📥 Téléchargement et export
+    - **Image individuelle** : Sous chaque affiche
+    - **Excel simple** : Tableau sans images
+    - **Excel avec images** : Tableau avec affiches intégrées
+    - **ZIP des images** : Toutes les images séparément
+
+    ### 📤 Export et impression
+    1. Sélectionnez vos films
+    2. Cliquez sur "📤 Exporter / Imprimer"
+    3. Choisissez le format souhaité
+    """)
+
+    st.markdown("---")
+
+    st.header("🎯 Sélection actuelle")
+    if st.session_state.selected_movies:
+        st.success(
+            f"**{len(st.session_state.selected_movies)} "
+            f"film(s) sélectionné(s)**"
+        )
+        for i, m in enumerate(st.session_state.selected_movies, 1):
+            st.write(f"{i}. {m['titre']} ({m['annee']})")
+
+        # Bouton pour vider la sélection
+        if st.button("🗑️ Vider la sélection", type="secondary"):
+            st.session_state.selected_movies = []
+            st.rerun()
     else:
-        st.info("👆 Entrez un titre de film et cliquez sur 'Rechercher' pour commencer.")
+        st.info("Aucun film sélectionné")
+
+    st.markdown("---")
+
+    # Export
+    if st.button(
+        "📤 Exporter / Imprimer",
+        type="primary",
+        use_container_width=True
+    ):
+        export_and_print()
+
+    st.markdown("---")
+
+    st.header("ℹ️ Informations")
+    st.markdown("""
+    **Application de gestion des films pour le CDI**
+
+    Cette application utilise l'API TMDB (The Movie Database) pour
+    rechercher des informations sur les films.
+
+    🎯 **Objectif :** Faciliter la gestion et l'inventaire des films
+    disponibles au Centre de Documentation et d'Information.
+    """)
 
 
-if __name__ == "__main__":
-    main()
+# ---------------- APPLICATION PRINCIPALE ----------------
+st.title("🎬 Gestion des Films du CDI")
+
+search = st.text_input(
+    "🔍 Rechercher un film",
+    placeholder="Ex: Avatar, Inception, Le Parrain..."
+)
+if st.button("🔍 Rechercher", type="primary") and search:
+    with st.spinner("Recherche en cours..."):
+        st.session_state.search_results = search_movies_tmdb(search)
+
+# Résultats
+if st.session_state.search_results:
+    st.subheader(
+        f"📋 Résultats de recherche "
+        f"({len(st.session_state.search_results)} films)"
+    )
+    for movie in st.session_state.search_results:
+        display_movie_card(movie)
+        st.divider()
+elif search:
+    st.warning("Aucun film trouvé pour cette recherche.")
+else:
+    st.info("👆 Entrez un titre de film et cliquez sur 'Rechercher' pour "
+            "commencer.")
