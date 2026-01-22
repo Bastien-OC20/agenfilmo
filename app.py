@@ -8,10 +8,19 @@ import requests
 from io import BytesIO
 from PIL import Image
 import pandas as pd
-from datetime import datetime
+from datetime import datetime # noqa: F401
 import zipfile
-import os
-import xlsxwriter
+
+# Import des modules locaux
+from search_movies import search_movies
+from create_worbook import (
+    create_simple_excel,
+    create_excel_with_images,
+    create_csv_export,
+    create_printable_html,
+    get_export_filename
+)
+from connexion import get_api_config
 
 # ---------------- CONFIGURATION PAGE ----------------
 st.set_page_config(
@@ -20,11 +29,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------- CONFIGURATION TMDB ----------------
-TMDB_API_KEY = st.secrets.get("TMDB_API_KEY")
-TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w300"  # image plus petite
-
 # ---------------- SESSION STATE ----------------
 if "search_results" not in st.session_state:
     st.session_state.search_results = []
@@ -32,42 +36,8 @@ if "search_results" not in st.session_state:
 if "selected_movies" not in st.session_state:
     st.session_state.selected_movies = []
 
-
-# ---------------- FONCTIONS API ----------------
-def search_movies_tmdb(query: str) -> list:
-    if not query or not TMDB_API_KEY:
-        return []
-
-    response = requests.get(
-        f"{TMDB_BASE_URL}/search/movie",
-        params={
-            "api_key": TMDB_API_KEY,
-            "query": query,
-            "language": "fr-FR",
-            "include_adult": False,
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    data = response.json()
-
-    movies = []
-    for movie in data.get("results", [])[:20]:
-        movies.append(
-            {
-                "id": movie["id"],
-                "titre": movie.get("title", "N/A"),
-                "annee": movie.get("release_date", "")[:4] or "N/A",
-                "resume": movie.get("overview", "Résumé non disponible"),
-                "affiche_url": (
-                    f"{TMDB_IMAGE_BASE_URL}{movie['poster_path']}"
-                    if movie.get("poster_path")
-                    else None
-                ),
-                "note": movie.get("vote_average", "N/A"),
-            }
-        )
-    return movies
+if "selected_api" not in st.session_state:
+    st.session_state.selected_api = "TMDB"
 
 
 # ---------------- TÉLÉCHARGEMENT D'IMAGES ----------------
@@ -132,117 +102,57 @@ def create_images_zip():
     return zip_buffer
 
 
-def create_excel_with_images():
-    """Crée un fichier Excel avec les images intégrées"""
-    if not st.session_state.selected_movies:
-        return None
-
-    excel_buffer = BytesIO()
-
-    # Créer un workbook avec xlsxwriter
-    workbook = xlsxwriter.Workbook(excel_buffer, {'in_memory': True})
-    worksheet = workbook.add_worksheet("Films CDI")
-
-    # Formats pour l'en-tête et les cellules
-    header_format = workbook.add_format({
-        'bold': True,
-        'font_size': 12,
-        'bg_color': '#4472C4',
-        'font_color': 'white',
-        'align': 'center',
-        'valign': 'vcenter',
-        'border': 1
-    })
-
-    cell_format = workbook.add_format({
-        'text_wrap': True,
-        'valign': 'top',
-        'border': 1
-    })
-
-    # En-têtes des colonnes
-    headers = ['Affiche', 'Titre', 'Année', 'Note', 'Résumé']
-    for col, header in enumerate(headers):
-        worksheet.write(0, col, header, header_format)
-
-    # Définir les largeurs des colonnes
-    worksheet.set_column(0, 0, 15)  # Colonne affiche
-    worksheet.set_column(1, 1, 25)  # Titre
-    worksheet.set_column(2, 2, 8)   # Année
-    worksheet.set_column(3, 3, 8)   # Note
-    worksheet.set_column(4, 4, 50)  # Résumé
-
-    # Ajouter les données et images
-    for row, movie in enumerate(st.session_state.selected_movies, 1):
-        # Définir la hauteur de la ligne pour l'image
-        worksheet.set_row(row, 120)  # 120 points ≈ 160 pixels
-
-        # Insérer l'image si disponible
-        if movie.get("affiche_url"):
-            try:
-                response = requests.get(movie["affiche_url"], timeout=10)
-                response.raise_for_status()
-
-                # Créer un BytesIO pour l'image
-                image_buffer = BytesIO(response.content)
-
-                # Insérer l'image dans la cellule
-                worksheet.insert_image(row, 0, f"image_{row}.jpg", {
-                    'image_data': image_buffer,
-                    'x_scale': 0.3,  # Réduire la taille
-                    'y_scale': 0.3,
-                    'x_offset': 5,
-                    'y_offset': 5
-                })
-            except Exception as e:
-                worksheet.write(row, 0, "Image indisponible", cell_format)
-        else:
-            worksheet.write(row, 0, "Pas d'image", cell_format)
-
-        # Ajouter les autres données
-        worksheet.write(row, 1, movie["titre"], cell_format)
-        worksheet.write(row, 2, str(movie["annee"]), cell_format)
-        worksheet.write(row, 3, str(movie["note"]), cell_format)
-        worksheet.write(row, 4, movie["resume"], cell_format)
-
-    workbook.close()
-    excel_buffer.seek(0)
-    return excel_buffer
-
-
 # ---------------- AFFICHAGE FILM ----------------
-def display_movie_card(movie):
+def display_movie_card(movie, index=None):
     col1, col2 = st.columns([1, 3])
+
+    # Créer une clé unique basée sur l'API, l'ID et l'index
+    api_prefix = st.session_state.selected_api.lower()
+    unique_id = f"{api_prefix}_{movie['id']}"
+    if index is not None:
+        unique_id += f"_{index}"
 
     with col1:
         if movie["affiche_url"]:
-            response = requests.get(movie["affiche_url"])
-            img = Image.open(BytesIO(response.content))
-            img.thumbnail((150, 220))
-            st.image(img)
+            try:
+                response = requests.get(movie["affiche_url"])
+                img = Image.open(BytesIO(response.content))
+                img.thumbnail((150, 220))
+                st.image(img)
 
-            # Bouton de téléchargement individuel de l'image
-            image_data = download_single_image(movie)
-            if image_data:
-                st.download_button(
-                    "📥 Télécharger l'image",
-                    data=image_data["data"],
-                    file_name=image_data["filename"],
-                    mime=image_data["mime"],
-                    key=f"img_{movie['id']}",
-                    use_container_width=True
-                )
+                # Bouton de téléchargement individuel de l'image
+                image_data = download_single_image(movie)
+                if image_data:
+                    st.download_button(
+                        "📥 Télécharger l'image",
+                        data=image_data["data"],
+                        file_name=image_data["filename"],
+                        mime=image_data["mime"],
+                        key=f"img_{unique_id}",
+                        use_container_width=True
+                    )
+            except Exception:
+                st.info("📷 Erreur de chargement d'image")
         else:
             st.info("📷 Pas d'image disponible")
 
     with col2:
         st.subheader(movie["titre"])
-        st.write(f"🎬 Année : {movie['annee']} | ⭐ {movie['note']}")
-        st.write(movie["resume"][:200] + "…")
+        info_line = f"🎬 Année : {movie['annee']}"
+        if movie.get('realisateur') and movie['realisateur'] != 'N/A':
+            info_line += f" | 🎭 Réalisateur : {movie['realisateur']}"
+        info_line += f" | ⭐ {movie['note']}"
+        st.write(info_line)
+        resume_text = (movie["resume"][:200] + "…"
+                       if len(movie["resume"]) > 200
+                       else movie["resume"])
+        st.write(resume_text)
 
-        if st.button("➕ Ajouter à la sélection", key=f"add_{movie['id']}"):
+        if st.button("➕ Ajouter à la sélection", key=f"add_{unique_id}"):
             if movie not in st.session_state.selected_movies:
                 st.session_state.selected_movies.append(movie)
+                st.success(f"Film '{movie['titre']}' ajouté à la sélection!")
+                st.rerun()
 
 
 # ---------------- EXPORT & IMPRESSION ----------------
@@ -251,65 +161,80 @@ def export_and_print():
         st.warning("Aucun film sélectionné.")
         return
 
+    # Préparer les colonnes à afficher
+    columns = ["titre", "annee", "note", "resume"]
+    if any(movie.get('realisateur') and movie['realisateur'] != 'N/A'
+           for movie in st.session_state.selected_movies):
+        columns.insert(2, "realisateur")
+
     df = pd.DataFrame(st.session_state.selected_movies)
-    df = df[["titre", "annee", "note", "resume"]]
+    df = df[columns]
 
     st.subheader("📋 Films sélectionnés")
     st.dataframe(df, use_container_width=True)
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         # EXPORT EXCEL SIMPLE (sans images)
-        excel_buffer = BytesIO()
-        df.to_excel(excel_buffer, index=False)
-        excel_buffer.seek(0)
-
-        st.download_button(
-            "📥 Excel simple",
-            excel_buffer,
-            file_name="films_cdi_simple.xlsx",
-            mime=("application/vnd.openxmlformats-officedocument"
-                  ".spreadsheetml.sheet"),
-            help="Tableau Excel sans les images"
-        )
+        simple_excel = create_simple_excel(st.session_state.selected_movies)
+        if simple_excel:
+            st.download_button(
+                "📥 Excel simple",
+                simple_excel,
+                file_name=get_export_filename('excel_simple'),
+                mime=("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet"),
+                help="Tableau Excel sans les images"
+            )
 
     with col2:
         # EXPORT EXCEL AVEC IMAGES
         if st.button("📊 Préparer Excel avec images"):
             with st.spinner("Création du fichier Excel avec images..."):
                 try:
-                    excel_with_images = create_excel_with_images()
+                    excel_with_images = create_excel_with_images(
+                        st.session_state.selected_movies
+                    )
                     if excel_with_images:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"films_cdi_avec_images_{timestamp}.xlsx"
                         st.download_button(
                             "📥 Excel avec images",
                             data=excel_with_images,
-                            file_name=filename,
+                            file_name=get_export_filename('excel_images'),
                             mime=("application/vnd.openxmlformats-"
                                   "officedocument.spreadsheetml.sheet"),
                             key="download_excel_images",
                             help="Tableau Excel avec les affiches intégrées"
                         )
                     else:
-                        st.error("Impossible de créer le fichier Excel avec "
-                                 "images")
+                        st.error("Impossible de créer le fichier Excel "
+                                 "avec images")
                 except Exception as e:
                     st.error(f"Erreur lors de la création du fichier Excel: "
-                            f"{str(e)}")
+                             f"{str(e)}")
 
     with col3:
+        # EXPORT CSV
+        csv_data = create_csv_export(st.session_state.selected_movies)
+        if csv_data:
+            st.download_button(
+                "📄 Export CSV",
+                csv_data,
+                file_name=get_export_filename('csv'),
+                mime="text/csv",
+                help="Export au format CSV"
+            )
+
+    with col4:
         # TÉLÉCHARGEMENT DES IMAGES EN ZIP
         if st.button("🖼️ Préparer ZIP des images"):
             with st.spinner("Création du fichier ZIP..."):
                 zip_data = create_images_zip()
                 if zip_data:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     st.download_button(
                         "📦 ZIP des images",
                         data=zip_data,
-                        file_name=f"images_films_{timestamp}.zip",
+                        file_name=get_export_filename('zip'),
                         mime="application/zip",
                         key="download_all_images"
                     )
@@ -318,12 +243,48 @@ def export_and_print():
 
     # VERSION IMPRIMABLE
     st.subheader("🖨️ Version imprimable")
-    st.markdown(df.to_html(index=False), unsafe_allow_html=True)
-    st.info("Utilisez Ctrl+P / Cmd+P pour imprimer le tableau")
+    html_content = create_printable_html(st.session_state.selected_movies)
+    if html_content:
+        st.markdown(html_content, unsafe_allow_html=True)
+        st.info("Utilisez Ctrl+P / Cmd+P pour imprimer le tableau")
 
 
 # ---------------- BARRE LATERALE ----------------
 with st.sidebar:
+    st.header("⚙️ Configuration API")
+
+    # Sélecteur d'API
+    api_choice = st.selectbox(
+        "Choisir l'API de recherche :",
+        ["TMDB", "OMDb"],
+        index=0 if st.session_state.selected_api == "TMDB" else 1,
+        help=("TMDB: Plus d'informations, images haute qualité. "
+              "OMDb: Plus simple, données IMDb.")
+    )
+
+    if api_choice != st.session_state.selected_api:
+        st.session_state.selected_api = api_choice
+        # Vider les résultats de recherche lors du changement d'API
+        st.session_state.search_results = []
+        st.rerun()
+
+    # Statut des clés API
+    tmdb_config = get_api_config("TMDB")
+    omdb_config = get_api_config("OMDb")
+
+    if st.session_state.selected_api == "TMDB":
+        if tmdb_config and tmdb_config.get('api_key'):
+            st.success("✅ Clé TMDB configurée")
+        else:
+            st.error("❌ Clé TMDB manquante")
+    else:
+        if omdb_config and omdb_config.get('api_key'):
+            st.success("✅ Clé OMDb configurée")
+        else:
+            st.error("❌ Clé OMDb manquante")
+
+    st.markdown("---")
+
     st.header("📖 Mode d'emploi")
 
     st.markdown("""
@@ -341,6 +302,7 @@ with st.sidebar:
     - **Image individuelle** : Sous chaque affiche
     - **Excel simple** : Tableau sans images
     - **Excel avec images** : Tableau avec affiches intégrées
+    - **CSV** : Export au format CSV
     - **ZIP des images** : Toutes les images séparément
 
     ### 📤 Export et impression
@@ -358,7 +320,10 @@ with st.sidebar:
             f"film(s) sélectionné(s)**"
         )
         for i, m in enumerate(st.session_state.selected_movies, 1):
-            st.write(f"{i}. {m['titre']} ({m['annee']})")
+            director_info = ""
+            if m.get('realisateur') and m['realisateur'] != 'N/A':
+                director_info = f" - {m['realisateur']}"
+            st.write(f"{i}. {m['titre']} ({m['annee']}){director_info}")
 
         # Bouton pour vider la sélection
         if st.button("🗑️ Vider la sélection", type="secondary"):
@@ -383,12 +348,15 @@ with st.sidebar:
     st.markdown("""
     **Application de gestion des films pour le CDI**
 
-    Cette application utilise l'API TMDB (The Movie Database) pour
-    rechercher des informations sur les films.
+    Cette application peut utiliser deux APIs différentes :
+    - **TMDB** (The Movie Database) : Plus d'informations, images HD
+    - **OMDb** (Open Movie Database) : Plus simple, données IMDb
 
     🎯 **Objectif :** Faciliter la gestion et l'inventaire des films
     disponibles au Centre de Documentation et d'Information.
-    """)
+
+    📋 **API actuelle :** {}
+    """.format(st.session_state.selected_api))
 
 
 # ---------------- APPLICATION PRINCIPALE ----------------
@@ -399,8 +367,11 @@ search = st.text_input(
     placeholder="Ex: Avatar, Inception, Le Parrain..."
 )
 if st.button("🔍 Rechercher", type="primary") and search:
-    with st.spinner("Recherche en cours..."):
-        st.session_state.search_results = search_movies_tmdb(search)
+    with st.spinner(f"Recherche en cours via "
+                    f"{st.session_state.selected_api}..."):
+        st.session_state.search_results = search_movies(
+            search, st.session_state.selected_api
+        )
 
 # Résultats
 if st.session_state.search_results:
@@ -408,8 +379,8 @@ if st.session_state.search_results:
         f"📋 Résultats de recherche "
         f"({len(st.session_state.search_results)} films)"
     )
-    for movie in st.session_state.search_results:
-        display_movie_card(movie)
+    for index, movie in enumerate(st.session_state.search_results):
+        display_movie_card(movie, index)
         st.divider()
 elif search:
     st.warning("Aucun film trouvé pour cette recherche.")
