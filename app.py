@@ -83,11 +83,11 @@ def download_single_image(movie):
 
         # Créer un nom de fichier sûr
         safe_filename = "".join(
-            c for c in movie["titre"] 
+            c for c in movie["titre"]
             if c.isalnum() or c in (' ', '-', '_')
         ).rstrip()
         filename = f"{safe_filename}_{movie['annee']}.jpg"
-        
+
         return {
             "data": response.content,
             "filename": filename,
@@ -115,7 +115,7 @@ def create_images_zip():
 
                     # Créer un nom de fichier sûr
                     safe_filename = "".join(
-                        c for c in movie["titre"] 
+                        c for c in movie["titre"]
                         if c.isalnum() or c in (' ', '-', '_')
                     ).rstrip()
                     filename = f"{safe_filename}_{movie['annee']}.jpg"
@@ -123,9 +123,9 @@ def create_images_zip():
                     # Ajouter l'image au ZIP
                     zip_file.writestr(filename, response.content)
 
-                except Exception as e:
+                except Exception:
                     st.warning(f"Impossible de télécharger l'image pour "
-                              f"{movie['titre']}: {str(e)}")
+                               f"{movie['titre']}")
                     continue
 
     zip_buffer.seek(0)
@@ -282,10 +282,11 @@ def export_and_print():
                     excel_with_images = create_excel_with_images()
                     if excel_with_images:
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"films_cdi_avec_images_{timestamp}.xlsx"
                         st.download_button(
                             "📥 Excel avec images",
                             data=excel_with_images,
-                            file_name=f"films_cdi_avec_images_{timestamp}.xlsx",
+                            file_name=filename,
                             mime=("application/vnd.openxmlformats-"
                                   "officedocument.spreadsheetml.sheet"),
                             key="download_excel_images",
@@ -297,7 +298,7 @@ def export_and_print():
                 except Exception as e:
                     st.error(f"Erreur lors de la création du fichier Excel: "
                             f"{str(e)}")
-    
+
     with col3:
         # TÉLÉCHARGEMENT DES IMAGES EN ZIP
         if st.button("🖼️ Préparer ZIP des images"):
