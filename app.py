@@ -197,9 +197,10 @@ def display_movie_card(movie, col, index):
             if movie.get("affiche_url"):
                 try:
                     response = requests.get(movie["affiche_url"], timeout=10)
+                    response.raise_for_status()
                     img = Image.open(BytesIO(response.content))
                     st.image(img, use_container_width=True)
-                except:
+                except (requests.RequestException, IOError, ValueError) as e:
                     st.info("📽️ Affiche non disponible")
             else:
                 st.info("📽️ Affiche non disponible")
@@ -328,10 +329,10 @@ def main():
     if search_button and search_query:
         with st.spinner("Recherche en cours..."):
             st.session_state.search_results = search_movies_tmdb(search_query)
-            # Réinitialiser les sélections
-            for i in range(100):  # Réinitialiser jusqu'à 100 films
-                if f"selected_{i}" in st.session_state:
-                    del st.session_state[f"selected_{i}"]
+            # Réinitialiser les sélections - nettoyer toutes les clés commençant par "selected_"
+            keys_to_delete = [key for key in st.session_state.keys() if key.startswith("selected_")]
+            for key in keys_to_delete:
+                del st.session_state[key]
     
     # Afficher les résultats
     if st.session_state.search_results:
